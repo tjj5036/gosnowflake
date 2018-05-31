@@ -4,15 +4,15 @@ package gosnowflake
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"net/http"
+				"net/http"
 	"net/url"
-	"strconv"
-	"time"
+		"time"
 
 	"github.com/google/uuid"
+	"fmt"
+	"io/ioutil"
+	"encoding/json"
+	"strconv"
 )
 
 const (
@@ -42,8 +42,8 @@ type snowflakeRestful struct {
 	HeartBeat   *heartbeat
 
 	Connection          *snowflakeConn
-	FuncPostQuery       func(context.Context, *snowflakeRestful, *url.Values, map[string]string, []byte, time.Duration) (*execResponse, error)
-	FuncPostQueryHelper func(context.Context, *snowflakeRestful, *url.Values, map[string]string, []byte, time.Duration, string) (*execResponse, error)
+	FuncPostQuery       func(context.Context, *snowflakeRestful, *url.Values, map[string]string, []byte) (*execResponse, error)
+	FuncPostQueryHelper func(context.Context, *snowflakeRestful, *url.Values, map[string]string, []byte, string) (*execResponse, error)
 	FuncPost            func(context.Context, *snowflakeRestful, string, map[string]string, []byte, time.Duration, bool) (*http.Response, error)
 	FuncGet             func(context.Context, *snowflakeRestful, string, map[string]string, time.Duration) (*http.Response, error)
 	FuncRenewSession    func(context.Context, *snowflakeRestful) error
@@ -105,20 +105,22 @@ type execResponseAndErr struct {
 	err  error
 }
 
+// Function that executes before a POST query is run. Responsible
+// for generating a request UUID as well as monitoring whether the query
+// was cancelled or not.
 func postRestfulQuery(
 	ctx context.Context,
 	sr *snowflakeRestful,
 	params *url.Values,
 	headers map[string]string,
-	body []byte,
-	timeout time.Duration) (
+	body []byte) (
 	data *execResponse, err error) {
 
 	requestID := uuid.New().String()
 	execResponseChan := make(chan execResponseAndErr)
 
 	go func() {
-		data, err := sr.FuncPostQueryHelper(ctx, sr, params, headers, body, timeout, requestID)
+		data, err := sr.FuncPostQueryHelper(ctx, sr, params, headers, body, requestID)
 		execResp := execResponseAndErr{data, err}
 		execResponseChan <- execResp
 		close(execResponseChan)
@@ -136,15 +138,19 @@ func postRestfulQuery(
 	}
 }
 
+// Function that executes a POST query. This is responsible for parsing / decoding a response
+// from Snowflake into some struct usable locally. Note that this returns an empty interface... this is
+// to gracefully handle JSON deserialization from Snowflake in the event of distinct query types (ie, internal vs
+// external queries)
 func postRestfulQueryHelper(
 	ctx context.Context,
 	sr *snowflakeRestful,
 	params *url.Values,
 	headers map[string]string,
 	body []byte,
-	timeout time.Duration,
 	requestID string) (
 	data *execResponse, err error) {
+
 	glog.V(2).Infof("params: %v", params)
 	params.Add("requestId", requestID)
 	if sr.Token != "" {
@@ -153,13 +159,14 @@ func postRestfulQueryHelper(
 	fullURL := fmt.Sprintf(
 		"%s://%s:%d%s", sr.Protocol, sr.Host, sr.Port,
 		"/queries/v1/query-request?"+params.Encode())
-	resp, err := sr.FuncPost(ctx, sr, fullURL, headers, body, timeout, false)
+	resp, err := sr.FuncPost(ctx, sr, fullURL, headers, body, sr.RequestTimeout, false)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		glog.V(2).Infof("postQuery: resp: %v", resp)
+		glog.V(2).Infof("postRestfulQueryHelper: resp: %v", resp)
+
 		var respd execResponse
 		err = json.NewDecoder(resp.Body).Decode(&respd)
 		if err != nil {
@@ -172,7 +179,7 @@ func postRestfulQueryHelper(
 			if err != nil {
 				return nil, err
 			}
-			return sr.FuncPostQuery(ctx, sr, params, headers, body, timeout)
+			return sr.FuncPostQuery(ctx, sr, params, headers, body)
 		}
 
 		var resultURL string

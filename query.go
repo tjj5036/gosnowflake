@@ -34,7 +34,29 @@ type execResponseChunk struct {
 	RowCount int    `json:"rowCount"`
 }
 
-// make all data field optional
+// Struct to hold upload information for a PUT command. Not used?
+type uploadInfo struct {
+	LocationType   string `json:"locationType"`
+	Location       string `json:"location"`
+	Path           string `json:"path"`
+	Region         string `json:"region"`
+	StorageAccount string `json:"storageAccount"`
+	Endpoint       string `json:"endpoint"`
+	// Missing creds
+}
+
+// Struct to hold stage information for a put command
+type stageInfo struct {
+	LocationType   string `json:"locationType"`
+	Location       string `json:"location"`
+	Path           string `json:"path"`
+	Region         string `json:"region"`
+	StorageAccount string `json:"storageAccount"`
+	Endpoint       string `json:"endpoint""`
+	// Missing creds
+}
+
+// All data fields are optional as a way to get around JSON deserialization
 type execResponseData struct {
 	// succeed query response data
 	Parameters         []nameValueParameter  `json:"parameters,omitempty"`
@@ -60,8 +82,23 @@ type execResponseData struct {
 	GetResultURL         string        `json:"getResultUrl,omitempty"`
 	ProgressDesc         string        `json:"progressDesc,omitempty"`
 	QueryAbortsAfterSecs time.Duration `json:"queryAbortsAfterSecs,omitempty"`
+
+	// Put / Get response data
+	UploadInfo                    uploadInfo `json:"uploadInfo""`
+	SrcLocations                  []string   `json:"src_locations"`
+	Parallel                      int        `json:"parallel"`
+	Kind                          string     `json:"kind"`
+	AutoCompress                  bool       `json:"autoCompress"`
+	Overwrite                     bool       `json:"overwrite"`
+	SourceCompression             string     `json:"sourceCompress"`
+	ClientShowEncryptionParameter bool       `json:"clientShowEncryptionParameter"`
+	EncryptionMaterial            string     `json:"encryptionMaterial"`
+	StageInfo                     stageInfo  `json:"stageInfo"`
+	Command                       string     `json:"command"`
+	Operation                     string     `json:"operation"`
 }
 
+// Struct to hold response data for a normal query
 type execResponse struct {
 	Data    execResponseData `json:"Data"`
 	Message string           `json:"message"`
