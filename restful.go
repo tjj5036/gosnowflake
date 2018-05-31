@@ -4,15 +4,15 @@ package gosnowflake
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
+	"encoding/json"
+	"fmt"
 	"github.com/google/uuid"
+	"io/ioutil"
+	"strconv"
 )
 
 // HTTP headers
@@ -135,6 +135,9 @@ func getRestful(
 		ctx, sr.Client, http.NewRequest, fullURL, headers, timeout).execute()
 }
 
+// Function that executes before a POST query is run. Responsible
+// for generating a request UUID as well as monitoring whether the query
+// was cancelled or not.
 func postRestfulQuery(
 	ctx context.Context,
 	sr *snowflakeRestful,
@@ -152,6 +155,13 @@ func postRestfulQuery(
 		return data, err
 	}
 
+	go func() {
+		data, err := sr.FuncPostQueryHelper(ctx, sr, params, headers, body, requestID)
+		execResp := execResponseAndErr{data, err}
+		execResponseChan <- execResp
+		close(execResponseChan)
+	}()
+
 	// For context cancel/timeout cases, special cancel request need to be sent
 	err = sr.FuncCancelQuery(sr, requestID)
 	if err != nil {
@@ -160,6 +170,10 @@ func postRestfulQuery(
 	return nil, ctx.Err()
 }
 
+// Function that executes a POST query. This is responsible for parsing / decoding a response
+// from Snowflake into some struct usable locally. Note that this returns an empty interface... this is
+// to gracefully handle JSON deserialization from Snowflake in the event of distinct query types (ie, internal vs
+// external queries)
 func postRestfulQueryHelper(
 	ctx context.Context,
 	sr *snowflakeRestful,
@@ -169,6 +183,7 @@ func postRestfulQueryHelper(
 	timeout time.Duration,
 	requestID *uuid.UUID) (
 	data *execResponse, err error) {
+
 	glog.V(2).Infof("params: %v", params)
 	params.Add(requestIDKey, requestID.String())
 	params.Add("clientStartTime", strconv.FormatInt(time.Now().Unix(), 10))
@@ -183,7 +198,8 @@ func postRestfulQueryHelper(
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		glog.V(2).Infof("postQuery: resp: %v", resp)
+		glog.V(2).Infof("postRestfulQueryHelper: resp: %v", resp)
+
 		var respd execResponse
 		err = json.NewDecoder(resp.Body).Decode(&respd)
 		if err != nil {

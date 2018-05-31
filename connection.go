@@ -48,9 +48,15 @@ func (sc *snowflakeConn) isDml(v int64) bool {
 	return false
 }
 
+// The actual implementation of various Execution methods (Exec, Query, etc on
+// DB or Conn)
 func (sc *snowflakeConn) exec(
 	ctx context.Context,
-	query string, noResult bool, isInternal bool, parameters []driver.NamedValue) (*execResponse, error) {
+	query string,
+	noResult bool,
+	isInternal bool,
+	parameters []driver.NamedValue) (
+	*execResponse, error) {
 	var err error
 	counter := atomic.AddUint64(&sc.SequenceCounter, 1) // query sequence counter
 
@@ -60,6 +66,7 @@ func (sc *snowflakeConn) exec(
 		SequenceID: counter,
 	}
 	req.IsInternal = isInternal
+
 	tsmode := "TIMESTAMP_NTZ"
 	idx := 1
 	if len(parameters) > 0 {
@@ -89,7 +96,7 @@ func (sc *snowflakeConn) exec(
 
 	headers := make(map[string]string)
 	headers["Content-Type"] = headerContentTypeApplicationJSON
-	headers["accept"] = headerAcceptTypeApplicationSnowflake // TODO v1.1: change to JSON in case of PUT/GET
+	headers["accept"] = headerContentTypeApplicationJSON
 	headers["User-Agent"] = userAgent
 	if serviceName, ok := sc.cfg.Params[serviceName]; ok {
 		headers["X-Snowflake-Service"] = *serviceName
@@ -99,6 +106,9 @@ func (sc *snowflakeConn) exec(
 	if err != nil {
 		return nil, err
 	}
+
+	// Store the request in the context in the event that we need it later.
+	ctx = context.WithValue(ctx, "req", req)
 
 	var data *execResponse
 
@@ -235,29 +245,39 @@ func (sc *snowflakeConn) QueryContext(ctx context.Context, query string, args []
 	if sc.rest == nil {
 		return nil, driver.ErrBadConn
 	}
+
+	// This may be extended in the future, but for now, PUT and GET are the only two
+	// internal queries that we support in the Go driver.
+	isInternal := isPutOrGet(query)
+
 	// TODO: handle noResult and isInternal
-	data, err := sc.exec(ctx, query, false, false, args)
+	data, err := sc.exec(ctx, query, false, isInternal, args)
 	if err != nil {
 		glog.V(2).Infof("error: %v", err)
 		return nil, err
 	}
 
-	rows := new(snowflakeRows)
-	rows.sc = sc
-	rows.RowType = data.Data.RowType
-	rows.ChunkDownloader = &snowflakeChunkDownloader{
-		sc:                 sc,
-		ctx:                ctx,
-		CurrentChunk:       data.Data.RowSet,
-		ChunkMetas:         data.Data.Chunks,
-		Total:              int64(data.Data.Total),
-		TotalRowIndex:      int64(-1),
-		CellCount:          len(data.Data.RowType),
-		Qrmk:               data.Data.Qrmk,
-		ChunkHeader:        data.Data.ChunkHeaders,
-		FuncDownload:       downloadChunk,
-		FuncDownloadHelper: downloadChunkHelper,
-		FuncGet:            getChunk,
+	if !isInternal {
+		rows := new(snowflakeRows)
+		rows.sc = sc
+		rows.RowType = data.Data.RowType
+		rows.ChunkDownloader = &snowflakeChunkDownloader{
+			sc:                 sc,
+			ctx:                ctx,
+			CurrentChunk:       data.Data.RowSet,
+			ChunkMetas:         data.Data.Chunks,
+			Total:              int64(data.Data.Total),
+			TotalRowIndex:      int64(-1),
+			CellCount:          len(data.Data.RowType),
+			Qrmk:               data.Data.Qrmk,
+			ChunkHeader:        data.Data.ChunkHeaders,
+			FuncDownload:       downloadChunk,
+			FuncDownloadHelper: downloadChunkHelper,
+			FuncGet:            getChunk,
+		}
+	} else {
+		// If this is an internal query, the rows can be populated here.
+		rows = processPutGet(data)
 	}
 	rows.ChunkDownloader.start()
 	return rows, err
